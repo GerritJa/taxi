@@ -2,21 +2,33 @@ package org.tuberlin.de.best_taxidriver;
 
 import org.apache.flink.api.java.tuple.Tuple11;
 
+import java.util.Arrays;
+import java.util.HashMap;
+
+
 /**
  * Created by gerrit on 26.10.15.
  */
-public class DriverStat {
+public class Statistic {
     public String licenseID;
     public int tripTimeSum_inSecs;
     public double trip_distanceSum;
     public double tip_amountSum;
     public double tolls_amountSum;
+    public double mta_tax;
+    public double fare_amount;
     public double total_amountSum;
+    public double total_amount_afterTax;
     public int countOfTrips;
 
-    public DriverStat() {
-    }
+    public int[] weekdays;
+    public int[] daytime;
 
+
+    public Statistic() {
+        weekdays = new int[7];
+        daytime = new int[24];
+    }
 
     public double getAvgTripTime(){
         return tripTimeSum_inSecs/ countOfTrips;
@@ -32,6 +44,14 @@ public class DriverStat {
 
     public double getAvgTripDistance(){
         return trip_distanceSum/ countOfTrips;
+    }
+
+    public double getAvgTotalAmountAfterTax() {
+        return getTotalAmountAfterTax() / countOfTrips;
+    }
+
+    public double getTotalAmountAfterTax() {
+        return total_amountSum - tolls_amountSum - mta_tax - fare_amount;
     }
 
     public Tuple11<String, Integer, Double, Double, Double, Double, Integer, Double, Double, Double, Double> getStatAsTuple(){
@@ -65,7 +85,7 @@ public class DriverStat {
 
     @Override
     public String toString() {
-        return "DriverStat{" +
+        return "Statistic{" +
                 "licenseID='" + licenseID + '\'' +
                 ", tripTimeSum_inSecs=" + tripTimeSum_inSecs +
                 ", trip_distanceSum=" + trip_distanceSum +
@@ -77,7 +97,24 @@ public class DriverStat {
                 ", avgTripDistance="+getAvgTripDistance()+
                 ", avgTollAmount" + getAvgTollAmount()+
                 ", avgTotalAmount="+getAvgTotalAmount()+
+                ", daytimeOfTrips=" + Arrays.toString(daytime) +
+                ", weekdayOfTrips=" + Arrays.toString(weekdays) +
                 '}';
+    }
+
+
+    public void mergeWeekdays(int[] weekdays) {
+        mergeNumericArray(this.weekdays, weekdays);
+    }
+
+    public void mergeDaytime(int[] daytime) {
+        mergeNumericArray(this.daytime, daytime);
+    }
+
+    private void mergeNumericArray(int[] targetArr, int[] arr) {
+        for (int i = 0; i < targetArr.length; i++) {
+            targetArr[i] += arr[i];
+        }
     }
 
 
