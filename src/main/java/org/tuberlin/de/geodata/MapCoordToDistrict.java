@@ -5,6 +5,7 @@ import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.configuration.Configuration;
+import org.tuberlin.de.read_data.Job;
 import org.tuberlin.de.read_data.Taxidrive;
 
 import java.util.Collection;
@@ -54,7 +55,8 @@ public class MapCoordToDistrict {
     public static DataSet<Taxidrive> readData(ExecutionEnvironment env, String taxiDatasetPath, String districtsPath) throws Exception {
         // set up the execution environment
         // load taxi data from csv-file
-        DataSet<Taxidrive> taxidrives = env.readCsvFile(taxiDatasetPath)
+
+/*        DataSet<Taxidrive> taxidrives = env.readCsvFile(taxiDatasetPath)
                 .pojoType(Taxidrive.class,
                         "taxiID",
                         "licenseID",
@@ -72,7 +74,11 @@ public class MapCoordToDistrict {
                         "mta_tax",
                         "tip_amount",
                         "tolls_amount",
-                        "total_amount");
+                        "total_amount");*/
+
+        DataSet<String> taxidrivesAsText = env.readTextFile(taxiDatasetPath);
+        DataSet<Taxidrive> taxidrives = taxidrivesAsText.flatMap(new Job.TaxidriveReader());
+
 
         //load districts
         DataSet<String> districtGeometriesAsText = env.readTextFile(districtsPath);
