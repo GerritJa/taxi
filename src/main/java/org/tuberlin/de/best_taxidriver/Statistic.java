@@ -3,7 +3,6 @@ package org.tuberlin.de.best_taxidriver;
 import org.apache.flink.api.java.tuple.Tuple11;
 
 import java.util.Arrays;
-import java.util.HashMap;
 
 
 /**
@@ -51,7 +50,7 @@ public class Statistic {
     }
 
     public double getTotalAmountAfterTax() {
-        return total_amountSum - tolls_amountSum - mta_tax - fare_amount;
+        return total_amountSum - mta_tax - tolls_amountSum;
     }
 
     public Tuple11<String, Integer, Double, Double, Double, Double, Integer, Double, Double, Double, Double> getStatAsTuple(){

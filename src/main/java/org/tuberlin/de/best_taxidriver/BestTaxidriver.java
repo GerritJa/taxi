@@ -8,9 +8,11 @@ import org.apache.flink.api.java.DataSet;
 import org.apache.flink.api.java.ExecutionEnvironment;
 import org.apache.flink.api.java.aggregation.Aggregations;
 import org.apache.flink.api.java.tuple.Tuple5;
+import org.apache.flink.api.java.tuple.Tuple6;
 import org.joda.time.DateTime;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
+import org.tuberlin.de.geodata.MapCoordToDistrict;
 import org.tuberlin.de.read_data.Taxidrive;
 
 /**
@@ -20,12 +22,20 @@ public class BestTaxidriver {
     public static void main(String[] args) throws Exception {
         // set up the execution environment
         final ExecutionEnvironment env = ExecutionEnvironment.getExecutionEnvironment();
+        String baseOutputPath = "hdfs:///results/eval_bestDriver/";
+        String taxiDatasetPath = "hdfs:///TaxiData/sorted_data.csv";
+        String districtsPath = "hdfs:///data/ny_districts.csv"; //local : "data/districts"
 
-        String taxiDatasetPath = args[0]; // local :"data/testData.csv"
-        String districtsPath = args[1]; //local : "data/districts"
+
+        if (args.length == 3) {
+            taxiDatasetPath = args[0]; // local :"data/testData.csv"
+            districtsPath = args[1]; //local : "data/districts"
+            baseOutputPath = args[2]; //local : "data/eval_bestDriver/"
+        }
+
 
         // load taxi data from csv-file
-        DataSet<Taxidrive> taxidrives = env.readCsvFile(taxiDatasetPath)
+        /*DataSet<Taxidrive> taxidrives = env.readCsvFile(taxiDatasetPath)
                 .pojoType(Taxidrive.class,
                         "taxiID",
                         "licenseID",
@@ -43,9 +53,10 @@ public class BestTaxidriver {
                         "mta_tax",
                         "tip_amount",
                         "tolls_amount",
-                        "total_amount");
+                        "total_amount");*/
 
-        //DataSet<Taxidrive> taxidrives = MapCoordToDistrict.readData(env, taxiDatasetPath, districtsPath);
+
+        DataSet<Taxidrive> taxidrives = MapCoordToDistrict.readData(env, taxiDatasetPath, districtsPath);
 
         taxidrives = taxidrives.filter(new FilterFunction<Taxidrive>() {
             @Override
@@ -56,39 +67,111 @@ public class BestTaxidriver {
 
         DataSet<Statistic> statisticsPerDrive = taxidrives.map(new DriveToDriverStatMapper());
 
-        Statistic overallStatistic = statisticsPerDrive.reduce(new StatReducer()).collect().get(0);
+        DataSet<Statistic> overallStatisticDataset = statisticsPerDrive.reduce(new StatReducer());
+        overallStatisticDataset.writeAsText(baseOutputPath + "overallStat.txt");
+
         DataSet<Statistic> statsByDriver = createDriverStatistics(taxidrives);
 
         statsByDriver = statsByDriver
                 .sortPartition("total_amount_afterTax", Order.DESCENDING)
                 .setParallelism(1);
 
+        statsByDriver.first(10).writeAsText(baseOutputPath + "bestDriverStat.txt");
+
 
         Statistic bestDriver = statsByDriver.first(1).collect().get(0);
+        //String bestDriverId = "DB1B4490DA4A46A7A9A009DF6A503675";
+        String bestDriverId = bestDriver.licenseID;
 
-        System.out.println("best driver stat " + bestDriver.toString() + "\n" +
-                "overallStatistic " + overallStatistic.toString());
+       /* System.out.println("best driver stat " + bestDriver.toString() + "\n" +
+                "overallStatistic " + overallStatistic.toString());*/
 
 
         DataSet<Taxidrive> bestDriverTrips = taxidrives.filter(new FilterFunction<Taxidrive>() {
             @Override
             public boolean filter(Taxidrive taxidrive) throws Exception {
-                return taxidrive.licenseID.equals(bestDriver.licenseID);
+                return taxidrive.licenseID.equals(bestDriverId);
             }
         });
-
-
-
-        /*statisticsPerDrive
-                .filter(statistic -> statistic.licenseID.equals(bestDriver)).groupBy(statistic1 -> {})*/
 
 
         calculateAmountDistributionByDayAndTime(taxidrives, "data/eval_bestDriver/amount_distribution_all.csv");
         calculateAmountDistributionByDayAndTime(bestDriverTrips, "data/eval_bestDriver/amount_distribution_bestDriver.csv");
 
+        calculateAmountDistributionByTime(taxidrives, "data/eval_bestDriver/amount_distribution_all_byTime.csv");
+        calculateAmountDistributionByWeekday(taxidrives, "data/eval_bestDriver/amount_distribution_all_byDay.csv");
+        calculateAmountDistributionByDistrict(taxidrives, "data/eval_bestDriver/amount_distribution_all_byDistrict.csv");
+
+        calculateAmountDistributionByTime(bestDriverTrips, "data/eval_bestDriver/amount_distribution_bestDriver_byTime.csv");
+        calculateAmountDistributionByWeekday(bestDriverTrips, "data/eval_bestDriver/amount_distribution_bestDriver_byDay.csv");
+        calculateAmountDistributionByDistrict(bestDriverTrips, "data/eval_bestDriver/amount_distribution_bestDriver_byDistrict.csv");
+
 
         env.execute("Driver Highscore");
     }
+
+
+    private static void calculateAmountDistributionByDistrict(DataSet<Taxidrive> taxidrives, String outputpath) {
+        taxidrives.map(new MapFunction<Taxidrive, Tuple6<Integer, Integer, Integer, String, Double, String>>() {
+            @Override
+            public Tuple6<Integer, Integer, Integer, String, Double, String> map(Taxidrive taxidrive) throws Exception {
+                return new Tuple6<Integer, Integer, Integer, String, Double, String>(
+                        1,
+                        getDateTime(taxidrive.getPickup_datetime()).getDayOfWeek(),
+                        getDateTime(taxidrive.getPickup_datetime()).getHourOfDay(),
+                        taxidrive.getPickupNeighborhood(),
+                        taxidrive.getTotal_amount() - taxidrive.mta_tax - taxidrive.tolls_amount,
+                        taxidrive.getPickupBorough()
+                );
+            }
+        }).groupBy(3, 5)
+                .aggregate(Aggregations.SUM, 0)
+                .and(Aggregations.SUM, 4)
+                .sortPartition(2, Order.ASCENDING)
+                .setParallelism(1)
+                .writeAsCsv(outputpath);
+    }
+
+    private static void calculateAmountDistributionByTime(DataSet<Taxidrive> taxidrives, String outputpath) {
+        taxidrives.map(new MapFunction<Taxidrive, Tuple5<Integer, Integer, Integer, String, Double>>() {
+            @Override
+            public Tuple5<Integer, Integer, Integer, String, Double> map(Taxidrive taxidrive) throws Exception {
+                return new Tuple5<Integer, Integer, Integer, String, Double>(
+                        1,
+                        getDateTime(taxidrive.getPickup_datetime()).getDayOfWeek(),
+                        getDateTime(taxidrive.getPickup_datetime()).getHourOfDay(),
+                        taxidrive.getPickupNeighborhood(),
+                        taxidrive.getTotal_amount() - taxidrive.mta_tax - taxidrive.tolls_amount
+                );
+            }
+        }).groupBy(2)
+                .aggregate(Aggregations.SUM, 0)
+                .and(Aggregations.SUM, 4)
+                .sortPartition(2, Order.ASCENDING)
+                .setParallelism(1)
+                .writeAsCsv(outputpath);
+    }
+
+    private static void calculateAmountDistributionByWeekday(DataSet<Taxidrive> taxidrives, String outputpath) {
+        taxidrives.map(new MapFunction<Taxidrive, Tuple5<Integer, Integer, Integer, String, Double>>() {
+            @Override
+            public Tuple5<Integer, Integer, Integer, String, Double> map(Taxidrive taxidrive) throws Exception {
+                return new Tuple5<Integer, Integer, Integer, String, Double>(
+                        1,
+                        getDateTime(taxidrive.getPickup_datetime()).getDayOfWeek(),
+                        getDateTime(taxidrive.getPickup_datetime()).getHourOfDay(),
+                        taxidrive.getPickupNeighborhood(),
+                        taxidrive.getTotal_amount() - taxidrive.mta_tax - taxidrive.tolls_amount
+                );
+            }
+        }).groupBy(1)
+                .aggregate(Aggregations.SUM, 0)
+                .and(Aggregations.SUM, 4)
+                .sortPartition(1, Order.ASCENDING)
+                .setParallelism(1)
+                .writeAsCsv(outputpath);
+    }
+
 
     private static void calculateAmountDistributionByDayAndTime(DataSet<Taxidrive> taxidrives, String outputpath) {
         taxidrives.map(new MapFunction<Taxidrive, Tuple5<Integer, Integer, Integer, String, Double>>() {
@@ -99,7 +182,7 @@ public class BestTaxidriver {
                         getDateTime(taxidrive.getPickup_datetime()).getDayOfWeek(),
                         getDateTime(taxidrive.getPickup_datetime()).getHourOfDay(),
                         taxidrive.getPickupNeighborhood(),
-                        taxidrive.getTotal_amount() - taxidrive.mta_tax - taxidrive.fare_amount - taxidrive.tolls_amount
+                        taxidrive.getTotal_amount() - taxidrive.mta_tax - taxidrive.tolls_amount
                 );
             }
         }).groupBy(1, 2)
@@ -133,7 +216,6 @@ public class BestTaxidriver {
             statistic.fare_amount = taxidrive.fare_amount;
             statistic.tripTimeSum_inSecs = taxidrive.trip_time_in_secs;
             statistic.mta_tax = taxidrive.mta_tax;
-
             statistic.total_amount_afterTax = statistic.getTotalAmountAfterTax();
 
             DateTimeFormatter formatter = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss");
